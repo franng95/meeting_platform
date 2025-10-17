@@ -1,9 +1,11 @@
-// lib/features/auth/seed_users_button.dart
+// lib/features/users/seed_users_button.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'auth_providers.dart';
 
-/// Debug button to create test users in the emulator
+import '../auth/auth_providers.dart';
+
 class SeedUsersButton extends ConsumerStatefulWidget {
   const SeedUsersButton({super.key});
 
@@ -12,98 +14,119 @@ class SeedUsersButton extends ConsumerStatefulWidget {
 }
 
 class _SeedUsersButtonState extends ConsumerState<SeedUsersButton> {
-  bool _isSeeding = false;
-  String? _message;
+  bool _busy = false;
 
-  Future<void> _seedUsers() async {
-    setState(() {
-      _isSeeding = true;
-      _message = null;
-    });
-
-    try {
-      final authService = ref.read(authServiceProvider);
-
-      // Create 3 test users
-      final testUsers = [
-        {'email': 'alice@test.com', 'password': 'password123', 'name': 'Alice Johnson'},
-        {'email': 'bob@test.com', 'password': 'password123', 'name': 'Bob Smith'},
-        {'email': 'charlie@test.com', 'password': 'password123', 'name': 'Charlie Brown'},
-      ];
-
-      for (var userData in testUsers) {
-        try {
-          await authService.signUpWithEmail(
-            email: userData['email']!,
-            password: userData['password']!,
-            displayName: userData['name']!,
-          );
-          debugPrint('✅ Created user: ${userData['email']}');
-        } catch (e) {
-          // User might already exist, that's okay
-          debugPrint('⚠️ User ${userData['email']} might already exist: $e');
-        }
-      }
-
-      // Sign out after creating users
-      await authService.signOut();
-
-      setState(() {
-        _message = '✅ Created 3 test users!\n\n'
-            'alice@test.com\n'
-            'bob@test.com\n'
-            'charlie@test.com\n\n'
-            'Password for all: password123';
-      });
-    } catch (e) {
-      setState(() {
-        _message = '❌ Error: $e';
-      });
-    } finally {
-      setState(() {
-        _isSeeding = false;
-      });
-    }
-  }
+  final _demoUsers = const [
+    _SeedUser(email: 'alice@example.com', password: 'passw0rd', displayName: 'Alice'),
+    _SeedUser(email: 'bob@example.com', password: 'passw0rd', displayName: 'Bob'),
+    _SeedUser(email: 'charlie@example.com', password: 'passw0rd', displayName: 'Charlie'),
+    _SeedUser(email: 'diana@example.com', password: 'passw0rd', displayName: 'Diana'),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        OutlinedButton.icon(
-          onPressed: _isSeeding ? null : _seedUsers,
-          icon: _isSeeding
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.person_add),
-          label: const Text('Create Test Users'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          ),
-        ),
-        if (_message != null) ...[
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.green.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.green.shade200),
-            ),
-            child: Text(
-              _message!,
-              style: TextStyle(
-                color: Colors.green.shade900,
-                fontSize: 12,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
-      ],
+    return FilledButton.icon(
+      onPressed: _busy ? null : () => _seed(context),
+      icon: _busy
+          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+          : const Icon(Icons.auto_fix_high),
+      label: Text(_busy ? 'Seeding...' : 'Seed demo users'),
     );
   }
+
+  Future<void> _seed(BuildContext context) async {
+    setState(() => _busy = true);
+
+    final authSvc = ref.read(authServiceProvider);
+    final auth = FirebaseAuth.instance;
+    final db = FirebaseFirestore.instance;
+
+    // Optional: sign out to avoid seeding under a currently signed-in user
+    try {
+      await auth.signOut();
+    } catch (_) {}
+
+    int created = 0;
+    int updated = 0;
+
+    for (final u in _demoUsers) {
+      try {
+        // Try to register (preferred path)
+        await authSvc.registerWithEmailAndPassword(u.email, u.password);
+        final current = auth.currentUser;
+        if (current != null) {
+          // Set displayName if needed
+          if ((current.displayName == null || current.displayName!.trim().isEmpty)) {
+            await current.updateDisplayName(u.displayName);
+          }
+          // Ensure users/{uid} exists & has the intended displayName (merge)
+          await db.collection('users').doc(current.uid).set({
+            'uid': current.uid,
+            'displayName': u.displayName,
+            'email': current.email,
+            'createdAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+        created++;
+      } on FirebaseAuthException catch (e) {
+        // If email already exists, sign in then make sure profile + doc are correct.
+        if (e.code == 'email-already-in-use') {
+          await authSvc.signInWithEmailAndPassword(u.email, u.password);
+          final current = auth.currentUser;
+          if (current != null) {
+            if ((current.displayName == null || current.displayName!.trim().isEmpty)) {
+              await current.updateDisplayName(u.displayName);
+            }
+            await db.collection('users').doc(current.uid).set({
+              'uid': current.uid,
+              'displayName': u.displayName,
+              'email': current.email,
+            }, SetOptions(merge: true));
+          }
+          updated++;
+        } else {
+          // Surface unexpected errors but keep going for the rest
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Seed error for ${u.email}: ${e.message}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Seed error for ${u.email}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      } finally {
+        // Sign out between users so each account is created cleanly
+        try {
+          await auth.signOut();
+        } catch (_) {}
+      }
+    }
+
+    if (mounted) {
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Seeding complete • Created: $created • Updated: $updated'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+}
+
+class _SeedUser {
+  final String email;
+  final String password;
+  final String displayName;
+  const _SeedUser({
+    required this.email,
+    required this.password,
+    required this.displayName,
+  });
 }

@@ -17,7 +17,7 @@ class InvitationsScreen extends StatelessWidget {
         appBar: AppBar(
           title: const Text('Invitations'),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-          automaticallyImplyLeading: false, // Remove back button when in bottom nav
+          automaticallyImplyLeading: false,
           bottom: const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.send), text: 'Sent'),
@@ -25,11 +25,14 @@ class InvitationsScreen extends StatelessWidget {
             ],
           ),
         ),
-        body: const TabBarView(
-          children: [
-            _SentInvitationsTab(),
-            _ReceivedInvitationsTab(),
-          ],
+        body: const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: TabBarView(
+            children: [
+              _SentInvitationsTab(),
+              _ReceivedInvitationsTab(),
+            ],
+          ),
         ),
       ),
     );
@@ -46,18 +49,16 @@ class _SentInvitationsTab extends ConsumerWidget {
 
     return invitationsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, stack) => Center(child: Text('Error: $error')),
+      error: (error, stack) => _ErrorView(
+        message: 'Error loading sent invitations: $error',
+        onRetry: () => ref.refresh(sentInvitationsProvider),
+      ),
       data: (invitations) {
         if (invitations.isEmpty) {
-          return const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.send_outlined, size: 64, color: Colors.grey),
-                SizedBox(height: 16),
-                Text('No sent invitations', style: TextStyle(color: Colors.grey)),
-              ],
-            ),
+          return const _EmptyView(
+            icon: Icons.send_outlined,
+            title: 'No sent invitations',
+            subtitle: 'Invite someone from the Users tab to get started.',
           );
         }
 
@@ -84,18 +85,16 @@ class _ReceivedInvitationsTab extends ConsumerWidget {
 
     return invitationsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, stack) => Center(child: Text('Error: $error')),
+      error: (error, stack) => _ErrorView(
+        message: 'Error loading received invitations: $error',
+        onRetry: () => ref.refresh(receivedInvitationsProvider),
+      ),
       data: (invitations) {
         if (invitations.isEmpty) {
-          return const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.inbox_outlined, size: 64, color: Colors.grey),
-                SizedBox(height: 16),
-                Text('No received invitations', style: TextStyle(color: Colors.grey)),
-              ],
-            ),
+          return const _EmptyView(
+            icon: Icons.inbox_outlined,
+            title: 'No received invitations',
+            subtitle: 'When someone invites you, it will appear here.',
           );
         }
 
@@ -124,19 +123,18 @@ class _SentInvitationCard extends ConsumerWidget {
       future: UsersService().getUserByUid(invitation.receiverId),
       builder: (context, snapshot) {
         final receiver = snapshot.data;
-        final receiverName = receiver?.displayName ?? 'Loading...';
+        final receiverName = _safeName(receiver?.displayName);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.deepPurple,
-              child: Text(
-                receiverName[0].toUpperCase(),
-                style: const TextStyle(color: Colors.white),
-              ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            leading: _GradientAvatar(letter: receiverName),
+            title: Text(
+              'To: ${receiverName.isEmpty ? "Loading..." : receiverName}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
-            title: Text('To: $receiverName'),
             subtitle: Text(_formatDate(invitation.createdAt)),
             trailing: _StatusChip(status: invitation.status),
           ),
@@ -160,60 +158,93 @@ class _ReceivedInvitationCard extends ConsumerWidget {
       future: UsersService().getUserByUid(invitation.senderId),
       builder: (context, snapshot) {
         final sender = snapshot.data;
-        final senderName = sender?.displayName ?? 'Loading...';
+        final senderName = _safeName(sender?.displayName);
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.deepPurple,
-              child: Text(
-                senderName[0].toUpperCase(),
-                style: const TextStyle(color: Colors.white),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              leading: _GradientAvatar(letter: senderName),
+              title: Text(
+                'From: ${senderName.isEmpty ? "Loading..." : senderName}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
+              subtitle: Text(_formatDate(invitation.createdAt)),
+              trailing: invitation.isPending
+                  ? Wrap(
+                      spacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          icon: const Icon(Icons.check, size: 18),
+                          label: const Text('Accept'),
+                          onPressed: () async {
+                            await invitationsService.acceptInvitation(invitation.id);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Invitation accepted!'),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.close, size: 18),
+                          label: const Text('Reject'),
+                          onPressed: () async {
+                            await invitationsService.rejectInvitation(invitation.id);
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Invitation rejected'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          },
+                        ),
+                      ],
+                    )
+                  : _StatusChip(status: invitation.status),
             ),
-            title: Text('From: $senderName'),
-            subtitle: Text(_formatDate(invitation.createdAt)),
-            trailing: invitation.isPending
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.check, color: Colors.green),
-                        onPressed: () async {
-                          await invitationsService.acceptInvitation(invitation.id);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Invitation accepted!'),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                          }
-                        },
-                        tooltip: 'Accept',
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.red),
-                        onPressed: () async {
-                          await invitationsService.rejectInvitation(invitation.id);
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Invitation rejected'),
-                                backgroundColor: Colors.red,
-                              ),
-                            );
-                          }
-                        },
-                        tooltip: 'Reject',
-                      ),
-                    ],
-                  )
-                : _StatusChip(status: invitation.status),
           ),
         );
       },
+    );
+  }
+}
+
+class _GradientAvatar extends StatelessWidget {
+  final String letter;
+  const _GradientAvatar({required this.letter});
+
+  @override
+  Widget build(BuildContext context) {
+    final safe = letter.isNotEmpty ? letter[0].toUpperCase() : '?';
+    return CircleAvatar(
+      backgroundColor: Colors.transparent,
+      radius: 22,
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            colors: [
+              Theme.of(context).colorScheme.primary,
+              Theme.of(context).colorScheme.secondary,
+            ],
+          ),
+        ),
+        child: Center(
+          child: Text(
+            safe,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -249,14 +280,20 @@ class _StatusChip extends StatelessWidget {
         status.toUpperCase(),
         style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold),
       ),
-      backgroundColor: color.withOpacity(0.1),
-      side: BorderSide(color: color),
+      backgroundColor: color.withOpacity(0.08),
+      side: BorderSide(color: color.withOpacity(0.6)),
     );
   }
 }
 
-/// Helper to format date
-String _formatDate(DateTime date) {
+String _safeName(String? name) {
+  final trimmed = (name ?? '').trim();
+  return trimmed;
+}
+
+/// Helper to format date safely
+String _formatDate(DateTime? date) {
+  if (date == null) return '—';
   final now = DateTime.now();
   final diff = now.difference(date);
 
@@ -265,4 +302,65 @@ String _formatDate(DateTime date) {
   if (diff.inDays < 1) return '${diff.inHours}h ago';
   if (diff.inDays < 7) return '${diff.inDays}d ago';
   return '${date.day}/${date.month}/${date.year}';
+}
+
+class _EmptyView extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _EmptyView({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 64, color: cs.outline),
+          const SizedBox(height: 16),
+          Text(title, style: TextStyle(fontSize: 18, color: cs.onSurface)),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 14, color: cs.onSurfaceVariant),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _ErrorView({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.red, size: 56),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

@@ -15,22 +15,48 @@ class AuthService {
   // Get current user
   User? get currentUser => _auth.currentUser;
 
-  /// Sign in with email and password
+  /// --- NEW: ensure users/{uid} exists (idempotent) ---
+  Future<void> _ensureUserDoc(User u) async {
+    final ref = _firestore.collection('users').doc(u.uid);
+    final snap = await ref.get();
+
+    if (!snap.exists) {
+      await ref.set({
+        'uid': u.uid,
+        'email': u.email,
+        'displayName': u.displayName,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } else {
+      // Keep fields aligned (don’t overwrite createdAt if present)
+      await ref.set({
+        'uid': u.uid,
+        'email': u.email,
+        'displayName': u.displayName,
+      }, SetOptions(merge: true));
+    }
+  }
+
+  /// Sign in with email and password (original API)
   Future<User?> signInWithEmail(String email, String password) async {
     try {
       final credential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
+      final user = credential.user;
+      if (user != null) {
+        await _ensureUserDoc(user); // ensure users/{uid} exists on sign-in too
+      }
       debugPrint('✅ Signed in: ${credential.user?.email}');
-      return credential.user;
+      return user;
     } on FirebaseAuthException catch (e) {
       debugPrint('❌ Sign in error: ${e.code} - ${e.message}');
       rethrow;
     }
   }
 
-  /// Create new account with email and password
+  /// Create new account with email and password (original API)
   Future<User?> signUpWithEmail({
     required String email,
     required String password,
@@ -49,15 +75,14 @@ class AuthService {
       // Update display name
       await user.updateDisplayName(displayName);
 
-      // Create user document in Firestore
+      // Create/merge user document in Firestore
       final appUser = AppUser(
         uid: user.uid,
         email: email,
         displayName: displayName,
         createdAt: DateTime.now(),
       );
-
-      await _firestore.collection('users').doc(user.uid).set(appUser.toJson());
+      await _firestore.collection('users').doc(user.uid).set(appUser.toJson(), SetOptions(merge: true));
 
       debugPrint('✅ Created account: $email');
       return user;
@@ -66,6 +91,32 @@ class AuthService {
       rethrow;
     }
   }
+
+  /// --- NEW: compatibility wrappers (match callers in login screen + seeder) ---
+
+  /// Alias for callers expecting Firebase-style naming.
+  Future<User?> signInWithEmailAndPassword(String email, String password) {
+    return signInWithEmail(email, password);
+  }
+
+  /// Alias for callers expecting Firebase-style naming (no displayName param).
+  /// Uses the local-part of the email as a friendly default displayName.
+  Future<User?> registerWithEmailAndPassword(String email, String password) {
+    final suggested =
+        email.contains('@') ? email.split('@').first.trim() : 'User';
+    return signUpWithEmail(
+      email: email,
+      password: password,
+      displayName: suggested.isEmpty ? 'User' : suggested,
+    );
+  }
+
+  /// Optional alt aliases some screens might use.
+  Future<User?> login(String email, String password) =>
+      signInWithEmail(email, password);
+
+  Future<User?> register(String email, String password) =>
+      registerWithEmailAndPassword(email, password);
 
   /// Sign out
   Future<void> signOut() async {

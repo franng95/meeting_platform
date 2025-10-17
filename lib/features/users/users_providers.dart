@@ -1,36 +1,32 @@
 // lib/features/users/users_providers.dart
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
-import '../../services/users_service.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../models/app_user.dart';
-import '../auth/auth_providers.dart';
+import '../../services/users_service.dart';
 
 /// Provider for UsersService
 final usersServiceProvider = Provider<UsersService>((ref) {
   return UsersService();
 });
 
-/// Provider that fetches all users except the current user
-final otherUsersProvider = FutureProvider<List<AppUser>>((ref) async {
+/// Users list EXCEPT the given uid, keyed by uid so caches don't bleed across accounts.
+/// Using autoDispose to free old user caches when uid changes.
+final otherUsersProvider =
+    FutureProvider.family.autoDispose<List<AppUser>, String>((ref, uid) async {
   final usersService = ref.watch(usersServiceProvider);
-  final authService = ref.watch(authServiceProvider);
-  final currentUser = authService.currentUser;
-  
-  if (currentUser == null) {
-    debugPrint('❌ No current user, returning empty list');
-    return [];
+
+  if (uid.isEmpty) {
+    debugPrint('❌ Empty uid, returning empty list');
+    return const [];
   }
-  
-  debugPrint('🔍 Current user UID: ${currentUser.uid}');
-  debugPrint('🔍 Current user email: ${currentUser.email}');
-  
-  // Get all users except me
-  final users = await usersService.getUsersExceptMe(currentUser.uid);
-  
-  debugPrint('✅ Filtered users (excluding me): ${users.length}');
+
+  debugPrint('🔍 Fetching users excluding uid: $uid');
+  final users = await usersService.getUsersExceptMe(uid);
+  debugPrint('✅ Filtered users (excluding $uid): ${users.length}');
   for (var user in users) {
     debugPrint('   - ${user.displayName} (${user.uid})');
   }
-  
+
   return users;
 });

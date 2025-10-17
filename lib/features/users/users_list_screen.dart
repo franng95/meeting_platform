@@ -1,10 +1,18 @@
 // lib/features/users/users_list_screen.dart
+import 'package:characters/characters.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../models/app_user.dart';
 import 'users_providers.dart';
 import '../invitations/invitations_providers.dart';
 import '../auth/auth_providers.dart';
+
+/// Local auth uid stream for this screen (self-contained).
+final _authUidProvider = StreamProvider<String?>(
+  (ref) => FirebaseAuth.instance.authStateChanges().map((u) => u?.uid),
+);
 
 class UsersListScreen extends ConsumerStatefulWidget {
   const UsersListScreen({super.key});
@@ -23,110 +31,145 @@ class _UsersListScreenState extends ConsumerState<UsersListScreen> {
     super.dispose();
   }
 
-  @override
-  void didChangeDependencies() {
-  super.didChangeDependencies();
-  ref.refresh(otherUsersProvider);
+  String _safeInitial(String name) {
+    final n = name.trim();
+    return n.isEmpty ? '?' : n.characters.first.toUpperCase();
   }
-  
+
   @override
   Widget build(BuildContext context) {
-    final usersAsync = ref.watch(otherUsersProvider);
+    final uidAsync = ref.watch(_authUidProvider);
+    final uidKey = uidAsync.when<String>(
+      data: (uid) => uid ?? 'nouser',
+      loading: () => 'loading',
+      error: (_, __) => 'error',
+    );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Users'),
-        elevation: 0,
-      ),
-      body: Column(
-        children: [
-          // Search bar
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: Theme.of(context).colorScheme.surface,
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search users...',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() => _searchQuery = '');
-                        },
-                      )
-                    : null,
-              ),
-              onChanged: (value) {
-                setState(() => _searchQuery = value.toLowerCase());
-              },
+    return KeyedSubtree(
+      key: ValueKey(uidKey),
+      child: uidAsync.when(
+        loading: () => const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        ),
+        error: (err, _) => Scaffold(
+          body: Center(child: Text('Auth error: $err')),
+        ),
+        data: (uid) {
+          if (uid == null) {
+            return const Scaffold(
+              body: Center(child: Text('Not signed in')),
+            );
+          }
+
+          // IMPORTANT: provider is now keyed by uid → no stale cache between users
+          final usersAsync = ref.watch(otherUsersProvider(uid));
+
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Users'),
+              elevation: 0,
             ),
-          ),
-
-          // Users list
-          Expanded(
-            child: usersAsync.when(
-              loading: () => const Center(
-                child: CircularProgressIndicator(),
-              ),
-              error: (error, stack) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error, size: 64, color: Colors.red),
-                    const SizedBox(height: 16),
-                    Text('Error: $error'),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () => ref.refresh(otherUsersProvider),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
-              data: (users) {
-                // Filter users based on search query
-                final filteredUsers = users.where((user) {
-                  return user.displayName.toLowerCase().contains(_searchQuery) ||
-                         user.email.toLowerCase().contains(_searchQuery);
-                }).toList();
-
-                if (filteredUsers.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          _searchQuery.isEmpty ? Icons.people_outline : Icons.search_off,
-                          size: 64,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _searchQuery.isEmpty
-                              ? 'No other users found'
-                              : 'No users match "$_searchQuery"',
-                          style: const TextStyle(fontSize: 18, color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                return ListView.builder(
-                  itemCount: filteredUsers.length,
+            body: Column(
+              children: [
+                // Search bar
+                Container(
                   padding: const EdgeInsets.all(16),
-                  itemBuilder: (context, index) {
-                    final user = filteredUsers[index];
-                    return _UserListTile(user: user);
-                  },
-                );
-              },
+                  color: Theme.of(context).colorScheme.surface,
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search users...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            )
+                          : null,
+                    ),
+                    onChanged: (value) {
+                      setState(() => _searchQuery = value.toLowerCase());
+                    },
+                  ),
+                ),
+
+                // Users list
+                Expanded(
+                  child: usersAsync.when(
+                    loading: () => const Center(
+                      child: CircularProgressIndicator(),
+                    ),
+                    error: (error, stack) => Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.error, size: 64, color: Colors.red),
+                          const SizedBox(height: 16),
+                          Text('Error: $error'),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: () => ref.refresh(otherUsersProvider(uid)),
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    data: (users) {
+                      // Filter users based on search query
+                      final filteredUsers = users.where((user) {
+                        final name = user.displayName.toLowerCase();
+                        final mail = user.email.toLowerCase();
+                        return name.contains(_searchQuery) || mail.contains(_searchQuery);
+                      }).toList();
+
+                      if (filteredUsers.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                _searchQuery.isEmpty
+                                    ? Icons.people_outline
+                                    : Icons.search_off,
+                                size: 64,
+                                color: Colors.grey,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _searchQuery.isEmpty
+                                    ? 'No other users found'
+                                    : 'No users match "$_searchQuery"',
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }
+
+                      return ListView.builder(
+                        itemCount: filteredUsers.length,
+                        padding: const EdgeInsets.all(16),
+                        itemBuilder: (context, index) {
+                          final user = filteredUsers[index];
+                          return _UserListTile(
+                            user: user,
+                            initial: _safeInitial(user.displayName),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -135,8 +178,9 @@ class _UsersListScreenState extends ConsumerState<UsersListScreen> {
 /// Individual user card with invite button
 class _UserListTile extends ConsumerWidget {
   final AppUser user;
+  final String initial;
 
-  const _UserListTile({required this.user});
+  const _UserListTile({required this.user, required this.initial});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -159,7 +203,7 @@ class _UserListTile extends ConsumerWidget {
           ),
           child: Center(
             child: Text(
-              user.displayName[0].toUpperCase(),
+              initial,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 20,
@@ -168,7 +212,7 @@ class _UserListTile extends ConsumerWidget {
             ),
           ),
         ),
-        
+
         // User name and email
         title: Text(
           user.displayName,
@@ -181,7 +225,7 @@ class _UserListTile extends ConsumerWidget {
             fontSize: 13,
           ),
         ),
-        
+
         // Invite button
         trailing: FilledButton.icon(
           onPressed: () => _showScheduleInviteDialog(context, ref),
@@ -212,7 +256,7 @@ class _UserListTile extends ConsumerWidget {
                 style: TextStyle(fontSize: 14),
               ),
               const SizedBox(height: 16),
-              
+
               // Date picker
               ListTile(
                 leading: const Icon(Icons.calendar_today),
@@ -241,7 +285,7 @@ class _UserListTile extends ConsumerWidget {
                   }
                 },
               ),
-              
+
               // Time picker
               ListTile(
                 leading: const Icon(Icons.access_time),
@@ -289,15 +333,15 @@ class _UserListTile extends ConsumerWidget {
         final authService = ref.read(authServiceProvider);
         final invitationsService = ref.read(invitationsServiceProvider);
         final currentUser = authService.currentUser;
-        
+
         if (currentUser == null) return;
-        
+
         await invitationsService.sendInvitation(
           senderId: currentUser.uid,
           receiverId: user.uid,
           scheduledFor: result,
         );
-        
+
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
