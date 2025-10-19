@@ -394,7 +394,7 @@ MIT License - See LICENSE file for details
 **Francisco Navarro**
 - **Email:** frannavarrogil@gmail.com
 - **GitHub:** [@franng95](https://github.com/franng95)
-- **LinkedIn:** (https://www.linkedin.com/in/franjng/)
+- **LinkedIn:** https://www.linkedin.com/in/franjng/
 
 ## Acknowledgments
 
